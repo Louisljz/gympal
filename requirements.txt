@@ -1,0 +1,7 @@
+opencv-python
+scikit-learn
+tqdm
+ipywidgets
+moviepy
+mediapipe
+pandas

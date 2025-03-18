@@ -27,11 +27,13 @@ KEYPOINTS = {
     "ankle_left": 27,
     "ankle_right": 28,
 }
-pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+pose = mp_pose.Pose(min_detection_confidence=0.7, min_tracking_confidence=0.6)
 
 reps = 0
 prev_phase = None
 cap = cv2.VideoCapture(1)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
 while True:
     ret, img = cap.read()
@@ -54,7 +56,7 @@ while True:
         idx = np.argmax(output)
         prob = output[idx]
 
-        if prob > 0.7: # threshold to configure
+        if prob > 0.8: # threshold to configure
             curr_phase = class_map[idx]
             phase_text = curr_phase
             if prev_phase == "bottom" and curr_phase == "top":
@@ -63,10 +65,10 @@ while True:
 
         mp_utils.draw_landmarks(img, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
 
-    cv2.putText(img, f"Phase: {phase_text}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 2)
-    cv2.putText(img, f"Reps: {reps}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 2)
-    cv2.imshow('Deadlift Counter', img)
+    cv2.putText(img, f"Phase: {phase_text}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3, cv2.LINE_AA)
+    cv2.putText(img, f"Reps: {reps}", (1000, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3, cv2.LINE_AA)
 
+    cv2.imshow('Deadlift Counter', img)
     if cv2.waitKey(1) & 0xFF == ord("q"):
         break
 

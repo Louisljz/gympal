@@ -16,13 +16,17 @@ pose = mp_pose.Pose(
 mp_drawing = mp.solutions.drawing_utils
 
 # Configuration parameters
-GRIP_THRESHOLD = 0.15  # Adjust this value based on testing
+GRIP_THRESHOLD = 0.05  # Adjust this value based on testing
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 FONT_SCALE = 0.7
 FONT_THICKNESS = 2
 TEXT_COLOR = (255, 255, 255)  # White text
 BG_COLOR = (0, 0, 0)  # Black background
-BARBELL_CONFIDENCE_THRESHOLD = 0.5  # Minimum confidence for barbell detection
+BARBELL_CONFIDENCE_THRESHOLD = 0.4  # Minimum confidence for barbell detection
+
+# Leniency parameters
+BARBELL_DISAPPEARANCE_TOLERANCE = 15  # Frames to allow barbell to disappear
+GRIP_PERSISTENCE_TIME = 1.5  # Seconds to maintain grip state after barbell disappears
 
 # Status tracking
 status = "Initializing..."
@@ -30,6 +34,11 @@ is_gripping = False
 grip_start_time = None
 grip_duration = 0
 grip_locked = False
+
+# Leniency tracking
+barbell_missing_frames = 0
+last_barbell_center = None
+last_barbell_detection_time = None
 
 
 def calculate_distance(point1, point2):
@@ -39,6 +48,7 @@ def calculate_distance(point1, point2):
 
 def process_frame(image, barbell_detections):
     global status, is_gripping, grip_start_time, grip_duration, grip_locked
+    global barbell_missing_frames, last_barbell_center, last_barbell_detection_time
 
     # Process the frame with MediaPipe Pose
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -64,6 +74,11 @@ def process_frame(image, barbell_detections):
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
             barbell_center = (int(x), int(y))
 
+            # Reset missing frames counter and update last detection time
+            barbell_missing_frames = 0
+            last_barbell_center = barbell_center
+            last_barbell_detection_time = time.time()
+
             # Draw bounding box for barbell
             cv2.rectangle(vis_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
@@ -80,6 +95,45 @@ def process_frame(image, barbell_detections):
                 cv2.LINE_AA,
             )
             break
+
+    # Apply leniency if barbell not detected but was recently seen
+    if not barbell_detected and last_barbell_center is not None:
+        current_time = time.time()
+        time_since_last_detection = (
+            current_time - last_barbell_detection_time
+            if last_barbell_detection_time
+            else float("inf")
+        )
+
+        # Check if we're within the tolerance window
+        if (
+            barbell_missing_frames < BARBELL_DISAPPEARANCE_TOLERANCE
+            and time_since_last_detection < GRIP_PERSISTENCE_TIME
+        ):
+            barbell_missing_frames += 1
+            barbell_center = last_barbell_center
+
+            # Show interpolated barbell with different color to indicate it's estimated
+            cv2.circle(
+                vis_image, barbell_center, 10, (0, 165, 255), -1
+            )  # Orange circle
+
+            # Add indicator text
+            cv2.putText(
+                vis_image,
+                f"Barbell tracking ({BARBELL_DISAPPEARANCE_TOLERANCE - barbell_missing_frames})",
+                (barbell_center[0] - 100, barbell_center[1] - 20),
+                FONT,
+                FONT_SCALE,
+                (0, 165, 255),
+                FONT_THICKNESS,
+            )
+
+            barbell_detected = True  # Consider barbell as detected for logic purposes
+        else:
+            # Reset tracking when tolerance exceeded
+            last_barbell_center = None
+            last_barbell_detection_time = None
 
     # Check if pose is detected
     pose_detected = False
@@ -118,6 +172,11 @@ def process_frame(image, barbell_detections):
         # Highlight wrists
         for wrist_point in wrist_points:
             cv2.circle(vis_image, wrist_point, 8, (0, 0, 255), -1)
+
+    # Add leniency indicators to status panel
+    leniency_text = ""
+    if barbell_missing_frames > 0:
+        leniency_text = f"Barbell tracking: {BARBELL_DISAPPEARANCE_TOLERANCE - barbell_missing_frames} frames left"
 
     # Determine status
     if not barbell_detected and not pose_detected:
@@ -186,7 +245,9 @@ def process_frame(image, barbell_detections):
     # Display status on frame
     # Create a semi-transparent overlay for text background
     overlay = vis_image.copy()
-    cv2.rectangle(overlay, (0, 0), (500, 180), BG_COLOR, -1)
+    cv2.rectangle(
+        overlay, (0, 0), (500, 210), BG_COLOR, -1
+    )  # Made taller for extra leniency info
     cv2.addWeighted(overlay, 0.7, vis_image, 0.3, 0, vis_image)
 
     # Add status text
@@ -210,6 +271,19 @@ def process_frame(image, barbell_detections):
         (0, 255, 0) if barbell_detected else (0, 0, 255),
         FONT_THICKNESS,
     )
+
+    # Add leniency information if active
+    if leniency_text:
+        cv2.putText(
+            vis_image,
+            leniency_text,
+            (10, 180),
+            FONT,
+            FONT_SCALE,
+            (0, 165, 255),  # Orange
+            FONT_THICKNESS,
+        )
+
     cv2.putText(
         vis_image,
         f"Person detected: {pose_detected}",
@@ -320,7 +394,7 @@ def main(video_source=0, save_output=True, output_filename="annotated_output.mp4
 
 if __name__ == "__main__":
     main(
-        "deadlift.mkv",  # Use video file
+        "exercises/deadlift_test.mkv",  # Use video file
         save_output=True,  # Enable saving
-        output_filename="deadlift_analysis.mp4",  # Output filename
+        output_filename="exercises/deadlift_analysis.mp4",  # Output filename
     )

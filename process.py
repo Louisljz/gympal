@@ -56,7 +56,7 @@ def process_all_videos(input_dir, output_dir):
 
 # Run the processing
 input_dir = "exercises/deadlift"
-output_dir = "deadlift_processed"
+output_dir = "exercises/deadlift_processed"
 
 # Create output directory if it doesn't exist
 os.makedirs(output_dir, exist_ok=True)

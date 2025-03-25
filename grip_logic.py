@@ -3,6 +3,10 @@ import mediapipe as mp
 import numpy as np
 import time
 from inference import get_model
+import joblib
+
+# Load Random Forest Model
+deadlift_model = joblib.load("pose_classifier.pkl")
 
 # Initialize MediaPipe Pose
 mp_pose = mp.solutions.pose
@@ -16,7 +20,7 @@ pose = mp_pose.Pose(
 mp_drawing = mp.solutions.drawing_utils
 
 # Configuration parameters
-GRIP_THRESHOLD = 0.05  # Adjust this value based on testing
+GRIP_THRESHOLD = 0.07  # Adjust this value based on testing
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 FONT_SCALE = 0.7
 FONT_THICKNESS = 2
@@ -40,6 +44,10 @@ barbell_missing_frames = 0
 last_barbell_center = None
 last_barbell_detection_time = None
 
+# Rep counting variables
+previous_pose = None
+rep_count = 0
+
 
 def calculate_distance(point1, point2):
     """Calculate Euclidean distance between two points"""
@@ -49,6 +57,7 @@ def calculate_distance(point1, point2):
 def process_frame(image, barbell_detections):
     global status, is_gripping, grip_start_time, grip_duration, grip_locked
     global barbell_missing_frames, last_barbell_center, last_barbell_detection_time
+    global previous_pose, rep_count
 
     # Process the frame with MediaPipe Pose
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -173,6 +182,26 @@ def process_frame(image, barbell_detections):
         for wrist_point in wrist_points:
             cv2.circle(vis_image, wrist_point, 8, (0, 0, 255), -1)
 
+        body_features = []
+        keypoints = [
+            mp_pose.PoseLandmark.LEFT_SHOULDER,
+            mp_pose.PoseLandmark.RIGHT_SHOULDER,
+            mp_pose.PoseLandmark.LEFT_ELBOW,
+            mp_pose.PoseLandmark.RIGHT_ELBOW,
+            mp_pose.PoseLandmark.LEFT_WRIST,
+            mp_pose.PoseLandmark.RIGHT_WRIST,
+            mp_pose.PoseLandmark.LEFT_HIP,
+            mp_pose.PoseLandmark.RIGHT_HIP,
+            mp_pose.PoseLandmark.LEFT_KNEE,
+            mp_pose.PoseLandmark.RIGHT_KNEE,
+            mp_pose.PoseLandmark.LEFT_ANKLE,
+            mp_pose.PoseLandmark.RIGHT_ANKLE,
+        ]
+
+        for kp in keypoints:
+            landmark = landmarks[kp]
+            body_features.extend([landmark.x, landmark.y])
+
     # Add leniency indicators to status panel
     leniency_text = ""
     if barbell_missing_frames > 0:
@@ -232,7 +261,7 @@ def process_frame(image, barbell_detections):
                 grip_duration = time.time() - grip_start_time
 
                 # Check if grip is maintained for enough time to be considered "locked"
-                if grip_duration > 1.0 and not grip_locked:
+                if grip_duration > 2.0 and not grip_locked:
                     grip_locked = True
                     status = "LOCKED IN - Grip secured"
                 else:
@@ -242,11 +271,31 @@ def process_frame(image, barbell_detections):
             grip_locked = False
             status = f"Not gripping (Distance: {normalized_distance:.3f})"
 
+        if grip_locked:
+            pose_prediction = deadlift_model.predict([body_features])[0]  # Predict pose
+
+            # Count reps when transitioning from "bottom" to "top"
+            if previous_pose == "bottom" and pose_prediction == "top":
+                rep_count += 1
+
+            previous_pose = pose_prediction  # Update previous pose
+
+            # Display pose classification and rep count
+            cv2.putText(
+                vis_image,
+                f"Pose: {pose_prediction}",
+                (10, 210),
+                FONT,
+                FONT_SCALE,
+                (0, 255, 255),
+                FONT_THICKNESS,
+            )
+
     # Display status on frame
     # Create a semi-transparent overlay for text background
     overlay = vis_image.copy()
     cv2.rectangle(
-        overlay, (0, 0), (500, 210), BG_COLOR, -1
+        overlay, (0, 0), (500, 250), BG_COLOR, -1
     )  # Made taller for extra leniency info
     cv2.addWeighted(overlay, 0.7, vis_image, 0.3, 0, vis_image)
 
@@ -313,6 +362,16 @@ def process_frame(image, barbell_detections):
         FONT_THICKNESS,
     )
 
+    cv2.putText(
+        vis_image,
+        f"Reps: {rep_count}",
+        (10, 240),
+        FONT,
+        FONT_SCALE,
+        (0, 255, 255),
+        FONT_THICKNESS,
+    )
+
     return vis_image
 
 
@@ -338,19 +397,12 @@ def main(video_source=0, save_output=True, output_filename="annotated_output.mp4
         print("Error: Could not open video source")
         return
 
-    # Get video properties for output
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-
     # Initialize video writer if saving is enabled
     video_writer = None
     if save_output:
         # Define codec and create VideoWriter object
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # or 'XVID' for AVI
-        video_writer = cv2.VideoWriter(
-            output_filename, fourcc, fps, (frame_width, frame_height)
-        )
+        video_writer = cv2.VideoWriter(output_filename, fourcc, 24, (1280, 720))
         print(f"Output video will be saved to: {output_filename}")
 
     print("Starting barbell grip detection. Press 'q' to quit.")
@@ -363,6 +415,7 @@ def main(video_source=0, save_output=True, output_filename="annotated_output.mp4
                 print("End of video stream or error capturing frame")
                 break
 
+            frame = cv2.resize(frame, (1280, 720))
             # Run barbell detection inference
             barbell_results = model.infer(frame)[0]
 
@@ -394,7 +447,7 @@ def main(video_source=0, save_output=True, output_filename="annotated_output.mp4
 
 if __name__ == "__main__":
     main(
-        "exercises/deadlift_test.mkv",  # Use video file
+        "exercises/test3.mp4",  # Use video file
         save_output=True,  # Enable saving
-        output_filename="exercises/deadlift_analysis.mp4",  # Output filename
+        output_filename="exercises/output.mp4",  # Output filename
     )

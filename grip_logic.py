@@ -2,11 +2,12 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import time
-from inference import get_model
+from ultralytics import YOLO
 import joblib
 
-# Load Random Forest Model
-deadlift_model = joblib.load("pose_classifier.pkl")
+# Load ML Models
+deadlift_model = joblib.load("models/pose_classifier.pkl")
+barbell_model = YOLO('models/barbell_detector.pt')
 
 # Initialize MediaPipe Pose
 mp_pose = mp.solutions.pose
@@ -54,7 +55,7 @@ def calculate_distance(point1, point2):
     return np.sqrt((point1[0] - point2[0]) ** 2 + (point1[1] - point2[1]) ** 2)
 
 
-def process_frame(image, barbell_detections):
+def process_frame(image, results):
     global status, is_gripping, grip_start_time, grip_duration, grip_locked
     global barbell_missing_frames, last_barbell_center, last_barbell_detection_time
     global previous_pose, rep_count
@@ -70,15 +71,15 @@ def process_frame(image, barbell_detections):
     barbell_detected = False
     barbell_center = None
 
-    for box in barbell_detections.predictions:
+    for box in results.boxes:
         if (
-            box.confidence > BARBELL_CONFIDENCE_THRESHOLD
-            and box.class_name == "barbell"
+            box.conf > BARBELL_CONFIDENCE_THRESHOLD
+            and barbell_model.names[int(box.cls)] == "barbell"
         ):
             barbell_detected = True
 
             # Get center of the barbell
-            x, y, w, h = box.x, box.y, box.width, box.height
+            x, y, w, h = box.xywh[0].tolist()
             x1, y1, x2, y2 = x - w // 2, y - h // 2, x + w // 2, y + h // 2
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
             barbell_center = (int(x), int(y))
@@ -92,7 +93,7 @@ def process_frame(image, barbell_detections):
             cv2.rectangle(vis_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
             # Label with confidence
-            label = f"Barbell: {box.confidence:.2f}"
+            label = f"Barbell: {box.conf.item():.2f}"
             cv2.putText(
                 vis_image,
                 label,
@@ -104,7 +105,7 @@ def process_frame(image, barbell_detections):
                 cv2.LINE_AA,
             )
             break
-
+    
     # Apply leniency if barbell not detected but was recently seen
     if not barbell_detected and last_barbell_center is not None:
         current_time = time.time()
@@ -384,10 +385,6 @@ def main(video_source=0, save_output=True, output_filename="annotated_output.mp4
         save_output: Boolean to determine if output should be saved
         output_filename: Filename for the saved output video
     """
-    # Load the barbell detection model
-    model = get_model(
-        model_id="barbell-object-detection/5", api_key="b2M97eRiEjdBuK9ZSdyG"
-    )
 
     # Open video source (webcam or file)
     cap = cv2.VideoCapture(video_source)
@@ -417,7 +414,7 @@ def main(video_source=0, save_output=True, output_filename="annotated_output.mp4
 
             frame = cv2.resize(frame, (1280, 720))
             # Run barbell detection inference
-            barbell_results = model.infer(frame)[0]
+            barbell_results = barbell_model(frame, verbose=False)[0] # first imageq
 
             # Process frame with pose detection and grip analysis
             processed_frame = process_frame(frame, barbell_results)
@@ -447,7 +444,7 @@ def main(video_source=0, save_output=True, output_filename="annotated_output.mp4
 
 if __name__ == "__main__":
     main(
-        "exercises/test3.mp4",  # Use video file
+        "exercises/demo.mp4",  # Use video file
         save_output=True,  # Enable saving
-        output_filename="exercises/output.mp4",  # Output filename
+        output_filename="exercises/review.mp4",  # Output filename
     )
